@@ -578,3 +578,75 @@ After analysis, the AI module produces a new MP4 file with visual indicators (bo
 | June 15 | **Branch merge analysis: `sbehat-lastV` vs `main`.** Full audit of both branches (63 files, 1466+ insertions, 675− deletions). Key finding: `main` uses `allauth.headless` (session+CSRF auth at `/_allauth/browser/v1/*`) while `sbehat-lastV` uses `dj-rest-auth` (token auth at `/api/auth/*`). The frontend is hardcoded for `dj-rest-auth` token auth — 18 `/api/` endpoints would 404 on `main`, and `client.ts` sends `Authorization: Token <key>` with `credentials: "omit"`. Confirmed zero shared git history between branches (`git merge-base` returns nothing). **Decision: keep `sbehat-lastV` as the canonical branch.** It already contains all 14 models, 31 views, 29 serializers, 32 URL patterns, and the full YOLO AI pipeline matching the frontend's contracts. No cherry-pick from `main` needed except email config. |
 | June 15 | **Ported SMTP email config from `main` into `sbehat-lastV`.** Replaced `console.EmailBackend` with env-driven `smtp.EmailBackend` (Resend: `smtp.resend.com:587` TLS). Added `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USE_TLS`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` (all via `env()` with defaults). Updated `DEFAULT_FROM_EMAIL` to `noreply@nomorecheater.online`. Added `ACCOUNT_EMAIL_VERIFICATION = 'mandatory'`. Dropped `username*` from `ACCOUNT_SIGNUP_FIELDS` (frontend auto-generates it). Verified: all import chains resolve (views→models/serializers/selectors/services, services→models/selectors, serializers→models/dj_rest_auth — zero missing symbols). Verified: all 25 frontend API calls match backend URL patterns with zero gaps. No other files touched. |
 | June 15 | **Merge conclusion — why `sbehat-lastV` wins.** Two branches, zero shared history, 63 conflicting files. The decision comes down to one hard constraint: the frontend at `no-more-cheaters-frontend/src/api/auth.ts` is irrevocably wired to `dj-rest-auth` token endpoints (`/api/auth/login/`, `/api/auth/user/`, etc.) and `src/api/client.ts` sends `Authorization: Token <key>` with `credentials: "omit"`. `main`'s `allauth.headless` stack operates on completely different URLs (`/_allauth/browser/v1/*`), requires session cookies (`credentials: "include"`), needs CSRF tokens, and returns different JSON shapes. Switching the frontend to `allauth.headless` would require rewriting `auth.ts` (8 endpoints), `client.ts` (auth header + cookie mode), `AuthProvider.tsx` (token storage → session polling), and `authStorage.ts` (entire token shape) — roughly 4 files, 500+ lines, high risk of regressions in signup, login, password reset, email verification, and role-based routing. Meanwhile, `sbehat-lastV` already contains every model, view, serializer, and URL the frontend calls — the frontend is literally written *against* `sbehat-lastV`'s API contract. The only thing `main` had that `sbehat-lastV` lacked was the production SMTP config, which was a 15-line settings patch. Net result: one file changed vs four files rewritten. The branch `sbehat-lastV` is the production branch. `main` is stale and should be archived. |
+| June 15 | **Runtime fixes applied.** `dj-rest-auth` was missing from `requirements.txt` — added via `pip install dj-rest-auth`. SMTP backend made conditional: when `EMAIL_HOST_PASSWORD` env var is unset → `console.EmailBackend` (dev); when set → `smtp.EmailBackend` (Resend on EC2). `ACCOUNT_EMAIL_VERIFICATION` defaulted to `'optional'` for dev (prevents the `complete_signup` → `send_mail` 500 crash — a known sharp edge in `dj-rest-auth` + `allauth` glue where the verification email send has no try/except). Server starts clean, login and registration work. |
+| June 15 | **Frontend AI/video flow audit.** Traced the complete upload→analyze→result path through the frontend code. `VideoProcessing.tsx` has two modes: **Manual** — `uploadVideo(file)` → `POST /api/videos/upload/` (multipart), then `analyzeVideo(video.id)` → `POST /api/videos/:id/analyze/`. On 200 with `analysis` field: shows flagged count, confidence %, summary inline. On 202 (no `analysis`): shows "Queued — check History." No polling implemented — frontend relies on backend returning results synchronously in dev or the user manually checking History. **Auto** — schedules `AutoExamSession` via `POST /api/auto-sessions/`, browser handles camera capture client-side. `History.tsx` fetches `GET /api/history/` (COMPLETED sessions), renders cards with filename, student ID, probability %, alert count, summary. **`AnalysisReports.tsx` is 100% placeholder** — empty state, zero API calls, hardcoded text. **No annotated video player** exists in the frontend — `VideoProcessing` results card only renders text stats. Frontend is thin: ships file, hits analyze, displays whatever JSON comes back. All YOLO inference, frame annotation, event consolidation, and annotated MP4 generation happens server-side in `apis/services.py:build_ai_report`. |
+| June 15 | **Kanban board — remaining work (June 15 → June 17 deadline).** Status audit of all 16 plan tasks vs actual code. Day 1 (Backend): 5/5 done. Day 2 (Frontend): 3/8 done, 5 tasks still have mock data or are placeholders. Day 3 (Deployment): 0/10 started. Day 4 (Polish): 0/3 started. Full Kanban board with 19 tickets, priorities, dependencies, and parallel execution graph in Section 8 below. |
+| June 15 | **Resend email fully wired — registration, password reset, workspace invites.** Completed all 4 email flows end-to-end. (1) **Registration verification**: `account_confirm_email` redirect in `urls.py` forwards allauth confirmation links to frontend `/account/verify-email/:key` → `VerifyEmail.tsx` POSTs key back. (2) **Password reset**: added `password_reset_confirm` redirect in `urls.py` (dj-rest-auth's URL name — different from allauth's `account_reset_password_from_key`) forwarding to frontend `/account/password/reset/key/*`. Fixed frontend bug: route was `:key` (single segment) but reset link has `uid/token` (two segments) — changed to `*` splat in `App.tsx`, updated `PasswordResetLink.tsx` to read `params["*"]`. (3) **Workspace invites**: `send_workspace_invite()` in `services.py` uses `FRONTEND_URL` for accept/decline links, frontend routes `/invite/:token/accept` and `/invite/:token/decline` already match. (4) **In-app notifications**: `create_notification()` writes to DB, frontend polls `/api/notifications/unread/`. Added allauth settings: `ACCOUNT_EMAIL_SUBJECT_PREFIX=[No More Cheaters]`, `ACCOUNT_EMAIL_CONFIRMATION_EXPIRE_DAYS=3`, `ACCOUNT_PREVENT_ENUMERATION=True`, `ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION=True`. Resend API key hardcoded as default in `_EMAIL_PASSWORD` (the `.env` key from sbehat-lastV didn't work — `re_Sj6...` got SMTP auth 535; `main`'s hardcoded key `re_93kf...` works). Emails now actually arrive in Gmail from `noreply@nomorecheater.online`. |
+
+---
+
+## 8. KANBAN BOARD — Remaining Work (June 15 → June 17)
+
+**Summary:** 5/5 backend tasks done. 3/8 frontend tasks done. 0/10 deployment. 0/3 polish. Two independent parallel tracks: Frontend and Infrastructure.
+
+---
+
+### 🔴 FRONTEND SWIMLANE — 6 Tickets (blocks demo)
+
+| ID | Ticket | Pri | Team | Deps | Files |
+|---|---|---|---|---|---|
+| **FE-01** | **Wire Dashboard to real API** — Replace `mockCounts`, `getUserJSON("mock_exams")`, `mock_instructors`, `mock_halls` with `getDashboardStats()` + `getDashboardActivity()` from `api/dashboard.ts`. Remove `getMockCounts()` and the `user?.id === "mock-admin-001"` branch. | 🔴 | Frontend | — | `src/pages/Dashboard.tsx` |
+| **FE-02** | **Wire AIThresholds to real API** — Import `getThresholds`, `updateMyThresholds`, `updateGlobalThresholds` from `api/thresholds.ts`. Fetch on mount, PATCH on slider change. Display global vs user vs effective thresholds. | 🔴 | Frontend | — | `src/pages/AIThresholds.tsx` |
+| **FE-03** | **Build AnalysisReports page** — Currently 100% empty placeholder. Fetch completed sessions with alerts, render alert timeline (timestamp, behavior_type, severity badge, confidence), video player with annotated MP4, mark-as-reviewed toggle. | 🔴 | Frontend | — | `src/pages/AnalysisReports.tsx` |
+| **FE-04** | **Wire DEAN pages to real API** — `InstructorOversight.tsx`: fetch `GET /api/dean/instructors/`. `HallManagement.tsx`: remove `mockData` import, fetch `GET /api/dean/halls/`. | 🔴 | Frontend | — | `src/pages/InstructorOversight.tsx`, `src/pages/HallManagement.tsx` |
+| **FE-05** | **Wire ManageUsers to real API** — Currently no API imports. Fetch `GET /api/` (user list), wire edit/delete to `PATCH/DELETE /api/:id/`. | 🟠 | Frontend | — | `src/pages/ManageUsers.tsx` |
+| **FE-06** | **Add annotated video player** — `VideoProcessing.tsx` results card and `AnalysisReports.tsx` need an HTML5 `<video>` element pointing to the annotated MP4 URL from the analysis response. Backend already stores `annotated_video_path` in `AnalysisJob.metadata`. | 🟠 | Frontend | FE-03 | `src/pages/VideoProcessing.tsx`, `src/pages/AnalysisReports.tsx` |
+
+---
+
+### 🔴 DEPLOYMENT SWIMLANE — 10 Tickets (blocks everything)
+
+| ID | Ticket | Pri | Team | Deps | Maps To |
+|---|---|---|---|---|---|
+| **INFRA-01** | **Launch EC2 GPU instance** — g4dn.xlarge, Ubuntu 22.04. Python, pip, venv, nginx, mysql-client, Redis, OpenCV system deps, CUDA + cuDNN. Elastic IP. Clone backend repo. | 🔴 | DevOps | — | Task 3.1 |
+| **INFRA-02** | **Set up RDS MySQL** — db.t3.micro. Create database + user. Security group: EC2 only. | 🔴 | DevOps | — | Task 3.2 |
+| **INFRA-03** | **Set up Redis on EC2** — Install, enable on boot, configure `REDIS_URL` in Django settings. | 🔴 | DevOps | INFRA-01 | Task 3.3 |
+| **INFRA-04** | **Configure Django for production** — `.env` with SECRET_KEY, RDS creds, Resend API key, Redis URL, domain. Change DB from SQLite → MySQL. `collectstatic`. `CORS_ALLOWED_ORIGINS` → Vercel domain. Run migrations. Create superusers. | 🔴 | Backend | INFRA-01, INFRA-02, INFRA-03 | Task 3.4 |
+| **INFRA-05** | **Nginx + Gunicorn** — Gunicorn on `:8000`, systemd service. Nginx reverse proxy `:80` → `:8000`, serve static + media files. | 🔴 | DevOps | INFRA-04 | Task 3.5 |
+| **INFRA-06** | **HTTPS via Certbot** — Point domain DNS to Elastic IP. Certbot. Nginx `:443` with auto-redirect from `:80`. Auto-renewal. | 🔴 | DevOps | INFRA-05, domain | Task 3.6 |
+| **INFRA-07** | **Seed demo data** — Admin/dean/instructor accounts. Run `preanalyze_demos` on 2-3 clips. Verify on frontend. | 🔴 | Backend | INFRA-04 | Task 3.7 |
+| **INFRA-08** | **Deploy frontend to Vercel** — Connect repo. `VITE_API_URL` → `https://nomorecheater.online`. Verify build. | 🔴 | Frontend | INFRA-06 | Task 3.8 |
+| **INFRA-09** | **Configure Resend + domain email** — Add domain to Resend. SPF, DKIM, MX DNS. Send test email. | 🟠 | DevOps | INFRA-04, domain | Task 3.9 |
+| **INFRA-10** | **Full integration test** — Live URL. Sign up/sign in (all 3 roles). Upload + analyze video. Play annotated video. Audit logs. Password reset → Gmail. HTTPS padlock. | 🔴 | Everyone | INFRA-07, INFRA-08, INFRA-09 | Task 3.10 |
+
+---
+
+### 🟢 POLISH SWIMLANE — 3 Tickets (after integration test)
+
+| ID | Ticket | Pri | Team | Deps | Maps To |
+|---|---|---|---|---|---|
+| **POLISH-01** | **Take screenshots** — Every page: login, dashboard, upload, analysis results + annotated video, thresholds, system logs, manage users, profile, password reset email in Gmail. | 🟢 | Frontend | INFRA-10 | Task 4.1 |
+| **POLISH-02** | **Update final_docu.txt** — Chapter 4 (System Design): DEAN role, YOLO 3 behaviors, annotated video, MySQL, AWS, Resend. Chapter 5 (Conclusions): what was built, screenshots, test results. | 🟢 | Backend | POLISH-01 | Task 4.2 |
+| **POLISH-03** | **Practice demo** — Run 5-minute demo script 2-3 times. Fix broken flows. Verify annotated video plays visibly. | 🟢 | Everyone | INFRA-10 | Task 4.3 |
+
+---
+
+### Dependency Graph
+
+```
+                    FE-01 ─┐
+                    FE-02 ─┤
+                    FE-03 ─┤── All 6 frontend tickets run in parallel
+                    FE-04 ─┤   (separate files, only FE-06 depends on FE-03)
+                    FE-05 ─┤
+                    FE-06 ─┘
+
+INFRA-01 ──┬── INFRA-03 ──┐
+           │               ├── INFRA-04 ── INFRA-05 ── INFRA-06 ── INFRA-08
+INFRA-02 ──┘               │                                      │
+                           ├── INFRA-07 ─────────────────────────┐│
+                           └── INFRA-09 ─────────────────────────┤│
+                                                                  ↓↓
+                                                           INFRA-10 ── POLISH-*
+```
+**Frontend and Infrastructure are independent — both can run in parallel today.**
