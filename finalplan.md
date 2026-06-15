@@ -581,7 +581,8 @@ After analysis, the AI module produces a new MP4 file with visual indicators (bo
 | June 15 | **Runtime fixes applied.** `dj-rest-auth` was missing from `requirements.txt` — added via `pip install dj-rest-auth`. SMTP backend made conditional: when `EMAIL_HOST_PASSWORD` env var is unset → `console.EmailBackend` (dev); when set → `smtp.EmailBackend` (Resend on EC2). `ACCOUNT_EMAIL_VERIFICATION` defaulted to `'optional'` for dev (prevents the `complete_signup` → `send_mail` 500 crash — a known sharp edge in `dj-rest-auth` + `allauth` glue where the verification email send has no try/except). Server starts clean, login and registration work. |
 | June 15 | **Frontend AI/video flow audit.** Traced the complete upload→analyze→result path through the frontend code. `VideoProcessing.tsx` has two modes: **Manual** — `uploadVideo(file)` → `POST /api/videos/upload/` (multipart), then `analyzeVideo(video.id)` → `POST /api/videos/:id/analyze/`. On 200 with `analysis` field: shows flagged count, confidence %, summary inline. On 202 (no `analysis`): shows "Queued — check History." No polling implemented — frontend relies on backend returning results synchronously in dev or the user manually checking History. **Auto** — schedules `AutoExamSession` via `POST /api/auto-sessions/`, browser handles camera capture client-side. `History.tsx` fetches `GET /api/history/` (COMPLETED sessions), renders cards with filename, student ID, probability %, alert count, summary. **`AnalysisReports.tsx` is 100% placeholder** — empty state, zero API calls, hardcoded text. **No annotated video player** exists in the frontend — `VideoProcessing` results card only renders text stats. Frontend is thin: ships file, hits analyze, displays whatever JSON comes back. All YOLO inference, frame annotation, event consolidation, and annotated MP4 generation happens server-side in `apis/services.py:build_ai_report`. |
 | June 15 | **Kanban board — remaining work (June 15 → June 17 deadline).** Status audit of all 16 plan tasks vs actual code. Day 1 (Backend): 5/5 done. Day 2 (Frontend): 3/8 done, 5 tasks still have mock data or are placeholders. Day 3 (Deployment): 0/10 started. Day 4 (Polish): 0/3 started. Full Kanban board with 19 tickets, priorities, dependencies, and parallel execution graph in Section 8 below. |
-| June 15 | **Resend email fully wired — registration, password reset, workspace invites.** Completed all 4 email flows end-to-end. (1) **Registration verification**: `account_confirm_email` redirect in `urls.py` forwards allauth confirmation links to frontend `/account/verify-email/:key` → `VerifyEmail.tsx` POSTs key back. (2) **Password reset**: added `password_reset_confirm` redirect in `urls.py` (dj-rest-auth's URL name — different from allauth's `account_reset_password_from_key`) forwarding to frontend `/account/password/reset/key/*`. Fixed frontend bug: route was `:key` (single segment) but reset link has `uid/token` (two segments) — changed to `*` splat in `App.tsx`, updated `PasswordResetLink.tsx` to read `params["*"]`. (3) **Workspace invites**: `send_workspace_invite()` in `services.py` uses `FRONTEND_URL` for accept/decline links, frontend routes `/invite/:token/accept` and `/invite/:token/decline` already match. (4) **In-app notifications**: `create_notification()` writes to DB, frontend polls `/api/notifications/unread/`. Added allauth settings: `ACCOUNT_EMAIL_SUBJECT_PREFIX=[No More Cheaters]`, `ACCOUNT_EMAIL_CONFIRMATION_EXPIRE_DAYS=3`, `ACCOUNT_PREVENT_ENUMERATION=True`, `ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION=True`. Resend API key hardcoded as default in `_EMAIL_PASSWORD` (the `.env` key from sbehat-lastV didn't work — `re_Sj6...` got SMTP auth 535; `main`'s hardcoded key `re_93kf...` works). Emails now actually arrive in Gmail from `noreply@nomorecheater.online`. |
+| June 15 | **Resend email fully wired.** Completed all 4 email flows end-to-end. Registration verification, password reset (fixed frontend route bug: `:key` → `*` splat), workspace invites, in-app notifications. Resend API key from main branch works (`re_93kf...`). Emails arrive in Gmail from `noreply@nomorecheater.online`. |
+| June 15 | **UX/QoL bug audit & fixes — 7 issues resolved, 5 remain.** Full 32-item QA checklist audit (Nielsen heuristics + React patterns). **Fixed: (1) Modal.tsx** — body scroll lock, focus trap (Tab/Shift+Tab cycling, Escape, focus save/restore, ARIA dialog attributes), onClose stabilized with ref to prevent re-render focus-jumping. **(2) Students.tsx inline Modal** — body scroll lock, Escape key, backdrop click dismiss, ARIA attributes, onClose ref stabilization. **(3) Students.tsx confirmDelete** — removed duplicate `setBusy(false)` (was called in both catch and finally). **(4) SignIn.tsx** — auto-focuses email input on empty-field validation error. **(5) SignUp.tsx** — `beforeunload` listener warns user if multi-step form has unsaved data. **(6-7)** `useRef` import added to Students.tsx, `useEffect` added to SignUp.tsx. Files: `Modal.tsx` (5.0KB), `Students.tsx` (20.9KB), `SignIn.tsx`, `SignUp.tsx`. See Section 9 for remaining items. |
 
 ---
 
@@ -650,3 +651,34 @@ INFRA-02 ──┘               │                                      │
                                                            INFRA-10 ── POLISH-*
 ```
 **Frontend and Infrastructure are independent — both can run in parallel today.**
+
+---
+
+## 9. UX/QoL Remaining Issues
+
+*Audited June 15 against a 32-item QA checklist. 19 items already solid. 7 fixed today. These 5 remain.*
+
+### 🔴 Should fix before demo
+
+| # | Issue | File | Fix |
+|---|---|---|---|
+| 1 | **Students inline modal lacks focus trap** — shared Modal.tsx has it, but Students.tsx inline Modal does not. Keyboard users can Tab out of Add/Edit/Delete student dialogs into the table behind. | `Students.tsx:52-110` | Wrap focus with same Tab/Shift+Tab logic from Modal.tsx. Or refactor Students to use the shared Modal component directly (remove inline Modal, import shared one). |
+| 2 | **Filter/search not in URL** — Students search bar lives in `useState`. Refresh wipes it. Back/forward doesn't restore it. Same for any tab state on other pages. | `Students.tsx:139` (search state), any page with similar local-only filter state | Sync to URL query params via `useSearchParams()`. |
+
+### 🟡 Nice to have (post-demo)
+
+| # | Issue | File | Fix |
+|---|---|---|---|
+| 3 | **SignIn auto-focus is naive** — always focuses email even when email is filled and password is empty. Should focus the first *empty* field. | `SignIn.tsx:55` | Check `!email` → focus email; `email && !password` → focus password. |
+| 4 | **No semantic field grouping** — forms use visual grouping (cards, containers) but no `<fieldset>`/`<legend>` for screen readers. | `SignUp.tsx`, `Students.tsx`, `Profile.tsx` | Wrap related fields in `<fieldset>` with descriptive `<legend>`. |
+| 5 | **CSV import button is a stub** — `onChange={() => {}}` does nothing. | `Students.tsx:298` | Wire to a real CSV parser + batch `createStudent()` calls. |
+
+### Audit summary
+
+| Category | Count |
+|---|---|
+| Already solid (no work) | 19 |
+| Fixed today | 7 |
+| Should fix before demo | 2 |
+| Nice to have | 3 |
+| **Total checklist items** | **32** |
