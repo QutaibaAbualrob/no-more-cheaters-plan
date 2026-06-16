@@ -693,3 +693,51 @@ INFRA-02 ──┘               │                                      │
 | Fixed — Pass 1 | 5 |
 | Fixed — Pass 2 | 8 |
 || **Total** | **32 / 32** |
+
+---
+
+# APPENDIX: Critical Problems Audit Conclusion
+
+> **Source:** `critical_problems.md` — full audit by DeepSeek v4 Pro Max, cross-reviewed by Claude Opus 4.8
+> **Date:** June 16, 2026
+> **Scope:** Every backend file (~8,500 lines), every API endpoint (57 endpoint-methods), frontend API contracts
+> **Result:** 8 critical, 13 high, 14 medium, 12 low. 2 retracted. 1 confirmed-fixed.
+
+## What Must Be Fixed for a Stable MVP
+
+For a single-user demo with short videos and `RQ_ASYNC=true`, these 8 items are blocking:
+
+| # | Problem | Symptom if unfixed | Fix |
+|---|---------|-------------------|-----|
+| C1 | Threshold slider doesn't reach AI pipeline | Slider is decorative. No amount of adjustment changes detection. | Pass effective thresholds from `build_thresholds_response()` to `analyze_video()` |
+| N3 | Threshold keys are semantically broken | Two of three sliders control nonexistent features. Third has unit mismatch. | Remove `noise_threshold` and `multiple_faces_threshold` from API. Map `gaze_threshold` to correct pipeline param. |
+| N1 | Probability formula fabricates false positives | Student looking left = 100% cheating. Phone in hand = 60%. | Rewrite `_report_probability` to use `_BEHAVIOR_RISK_WEIGHTS` (type-aware) and actual confidence values, not severity buckets |
+| C6 | Probability formula dilutes evidence | Adding more LOW alerts DROPS the score. Arithmetic mean is wrong model. | Use multiplicative `1 - ∏(1 - c·w)` from dead `_cheating_probability`, or weighted sum |
+| C7 | No idempotency guard on analysis | Retry overwrites previous results. Concurrent analyze double-processes. | Check `job.status` before setting PROCESSING in `tasks.py:49` |
+| C4 | DB transaction held during entire analysis | In eager mode: browser timeout. Worker: DB connections held for minutes. | Move `_attach_alert_evidence` and `analyze_video` outside `@transaction.atomic` |
+| H8 | Annotated video URL unused by frontend | Main visual feature invisible. No component renders it. | Add `<video>` element to `AnalysisReports.tsx` ReportView reading `annotated_video_url` |
+| C3 | Media files 404 without Nginx config | Snapshots, clips, annotated videos broken. | Verify Nginx `location /media/` block in Task 3.5 |
+
+## What Can Wait (Not MVP-Blocking)
+
+- C2 (3/6 behaviors undetectable) — existing 3 behaviors sufficient for demo
+- C5 (re-analysis orphans) — won't re-analyze enough times in a demo to fill disk
+- N2 (upload validation) — won't upload corrupted files intentionally during demo
+- All medium and low findings
+
+## What the Demo Actually Looks Like After Fixes
+
+With the 8 MVP fixes applied and `RQ_ASYNC=true`:
+
+1. Professor logs in → Dashboard ✅
+2. Uploads exam video → auto-analyzes → navigates to Analysis page ✅
+3. Polls for 30-60 seconds → report appears with per-student evidence cards ✅
+4. Probability gauge shows sensible score (type-aware, confidence-weighted) ✅
+5. Adjusts threshold slider → re-analyzes another video → sensitivity actually changes ✅
+6. Full annotated video with bounding boxes plays ✅
+7. Per-alert 3-second clips + face crops render ✅
+8. Dismiss/flag alerts work ✅
+
+**The threshold system is the deepest fix.** Without C1+N3, the slider controls nonexistent features via wrong units. With them fixed, the professor's single most interactive moment — "watch this, I can adjust sensitivity" — actually demonstrates real behavior change.
+
+> — DeepSeek v4 Pro Max, June 16 2026. Appended to finalplan.md as audit conclusion.
