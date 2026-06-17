@@ -18,7 +18,7 @@ authoritative.
 ```python
 OBJECT_IMGSZ = max(32, _env_int('AI_OBJECT_IMGSZ', 960))
 POSE_IMGSZ   = max(32, _env_int('AI_POSE_IMGSZ', 960))
-OBJECT_HALF  = _env_bool('AI_OBJECT_HALF', False)        # FP16, GPU-only, opt-in
+OBJECT_HALF  = _env_bool('AI_OBJECT_HALF', False)        # FP16, GPU-only (later default-ON via AI_HALF — see 3.9)
 OBJECT_AGNOSTIC_NMS = _env_bool('AI_AGNOSTIC_NMS', False)  # near-inert; opt-in
 ```
 
@@ -215,6 +215,39 @@ adversarial review. The notable decisions:
 | **V2 (horizontal offset) mandatory** | A bowed-over-paper head can occlude one ear (satisfying V1) with zero yaw; requiring V2 means looking-down can never flag. |
 | **`agnostic_nms` default OFF** | With `classes=[63,67]` paper/book (class 73) is filtered *before* NMS, so agnostic NMS cannot merge a paper-vs-laptop overlap — it is near-inert here. Kept as an opt-in flag only. |
 | **Looking-away OFF by default** | It cannot be made reliable on an oblique camera with 2D keypoints (Finding 4). Better to ship it opt-in than to flag the whole class. |
+
+---
+
+## 3.9 GPU acceleration (later change — 2026-06-17)
+
+A separate, later change set to make analysis run fast on an NVIDIA GPU (AWS g4dn
+**T4**; verified locally on an **RTX 3070**). It is purely about speed and changes
+**no detection behaviour**. Full deploy guide:
+[07_gpu_deployment.md](07_gpu_deployment.md).
+
+* **`config.py`** — FP16 now **defaults ON** for GPU: `HALF = _env_bool('AI_HALF',
+  True)`, with `OBJECT_HALF`/`POSE_HALF` inheriting it (so the §3.1
+  `AI_OBJECT_HALF=False` default is superseded). Added `WARMUP` (`AI_WARMUP`,
+  default True) and `NVENC` (`AI_NVENC`, default `auto`). `resolve_device()` now
+  logs the resolved device + GPU name.
+* **`model_cache.py`** (NEW) — process-level `(weights, device) → model` cache so a
+  long-lived worker loads each ~115 MB checkpoint **once** and reuses it across
+  jobs, with a one-shot dummy-inference **warmup** on first load. Safe only because
+  analysis is serialized (one video at a time).
+* **`yolo_detector.py` / `pose_analyzer.py`** — the lazy `model` property now
+  delegates to `model_cache.load_model(...)`. `PoseAnalyzer` gained a `half`
+  parameter and now applies FP16 on GPU (it previously never did).
+* **`face_tracker.py`** — `_reencode_h264` prefers GPU **`h264_nvenc`** when the
+  ffmpeg binary advertises it (probed once via `-encoders`, cached) and **always
+  falls back to `libx264`**, so a missing/old NVENC can never break the re-encode.
+  Covers both the annotated video and the evidence clips. (This is in addition to
+  the §3.5 `???`-label fix.)
+
+No DB / API / frontend contract changed; the mocked suite still passes (147/147 at
+the time of this change). Deferred (see [07_gpu_deployment.md](07_gpu_deployment.md)
+§7.7): batched inference, multi-GPU, TensorRT.
+
+---
 
 See [05_verification.md](05_verification.md) for proof these changes behave as
 intended, and [04_configuration_reference.md](04_configuration_reference.md) for

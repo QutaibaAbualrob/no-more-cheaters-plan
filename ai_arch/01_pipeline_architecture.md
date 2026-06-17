@@ -50,7 +50,8 @@ Django-specific (models, media paths, transactions) stays in `services.py`.
 | `yolo_detector.py` | `ObjectDetector` — runs `yolo11x.pt` on a frame and returns kept **phone/laptop** detections (with per-class confidence gating). |
 | `pose_analyzer.py` | `PoseAnalyzer` — runs `yolo11x-pose.pt`, estimates head turn from COCO-17 keypoints, returns **looking-away** flags with a person box. |
 | `detector.py` | The orchestrator. Runs both detectors over the sampled frames, **consolidates** raw per-frame detections into temporal **events**, and writes the annotated full-length video. |
-| `face_tracker.py` | OpenCV Haar-cascade **face tracking** + the **evidence drawing** primitives (boxes, labels, face crops, short clips, H.264 re-encode). |
+| `face_tracker.py` | OpenCV Haar-cascade **face tracking** + the **evidence drawing** primitives (boxes, labels, face crops, short clips, H.264 re-encode — GPU **NVENC** when available, else CPU libx264). |
+| `model_cache.py` | Process-level cache of loaded YOLO models (each `(weights, device)` loaded once and reused across jobs) + a one-shot **warmup** on first load. A GPU-deploy optimisation — see [07_gpu_deployment.md](07_gpu_deployment.md). |
 | `__init__.py` | Exports `analyze_video`, `consolidate_events`, `AnalysisResult`, `AlertEvent`, `config`. |
 
 ---
@@ -68,7 +69,11 @@ Two pretrained Ultralytics YOLO11-**extra-large** checkpoints:
 
 Both are resolved by name; Ultralytics downloads (~220 MB total) and caches them
 on first use. They load lazily on first frame and are moved to the resolved
-device (GPU `0` or `'cpu'`, see `config.resolve_device()`).
+device (GPU `0` or `'cpu'`, see `config.resolve_device()`). On a GPU they run in
+**FP16 by default** (`AI_HALF`, applied only when the device is not CPU) and are
+loaded **once per process and reused across jobs** via `model_cache.py`, which
+also runs a one-shot warmup on first load. See
+[07_gpu_deployment.md](07_gpu_deployment.md) for the GPU story end to end.
 
 **COCO-17 keypoint indices used by the heuristic** (`pose_analyzer.py`):
 
@@ -195,8 +200,11 @@ report draw the real detection (previously the box was thrown away here).
 Independently of the report evidence, the pipeline can write a
 `<name>_annotated.mp4`: it re-reads every frame, draws the surviving detections'
 boxes on the frames that back an event, overlays an `ALERT: ...` banner during
-each event window, and re-encodes to browser-playable H.264. This path always
-used the real detection box; it was **not** the source of the wrong-box bug.
+each event window, and re-encodes to browser-playable H.264. The re-encode uses
+the GPU's hardware encoder **NVENC** (`h264_nvenc`) when an NVENC-capable ffmpeg
+is present (`AI_NVENC=auto`), falling back to CPU `libx264` otherwise — see
+[07_gpu_deployment.md](07_gpu_deployment.md) §7.9. This path always used the real
+detection box; it was **not** the source of the wrong-box bug.
 
 ---
 

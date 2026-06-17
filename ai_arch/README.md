@@ -63,7 +63,7 @@ nomorecheaters/apis/ai/config.py          # tunables, class thresholds, looking-
 nomorecheaters/apis/ai/yolo_detector.py   # imgsz + per-class confidence filtering; cached/warmed model load
 nomorecheaters/apis/ai/detector.py        # carry bbox end-to-end; gate the pose pass
 nomorecheaters/apis/ai/pose_analyzer.py   # v2 looking-away heuristic + real person box; GPU FP16 + cached/warmed model load
-nomorecheaters/apis/ai/face_tracker.py    # em-dash -> hyphen in drawn labels
+nomorecheaters/apis/ai/face_tracker.py    # em-dash -> hyphen in labels; NVENC GPU re-encode w/ libx264 fallback
 nomorecheaters/apis/ai/model_cache.py     # process-level YOLO model cache + one-shot warmup (GPU deploy)
 nomorecheaters/apis/services.py           # draw the REAL detection box; spatial attribution
 test-photos/run.py                        # standalone tester aligned to production

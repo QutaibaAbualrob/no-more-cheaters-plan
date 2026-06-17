@@ -25,6 +25,7 @@ in the backend `.env`). Defaults below are the production values after the fix.
 | `AI_OBJECT_HALF` / `AI_POSE_HALF` | = `AI_HALF` | Per-model FP16 overrides (`AI_OBJECT_HALF` kept for back-compat). Same GPU-only gate. |
 | `AI_AGNOSTIC_NMS` | `false` | Class-agnostic NMS. Near-inert with `classes=[63,67]`; opt-in only. |
 | `AI_SAMPLE_RATE` | `15` | Analyse every Nth frame. The biggest single lever on total runtime. Lower = more thorough + slower. |
+| `AI_NVENC` | `auto` | Codec for the video **re-encode** (annotated video + clips). `auto` → GPU NVENC (`h264_nvenc`) when the ffmpeg binary supports it, else CPU `libx264`; `off` → always libx264. Needs a system ffmpeg built with NVENC (the bundled one isn't); always falls back to libx264, so it can only speed up encoding. See [07_gpu_deployment.md](07_gpu_deployment.md) §7.9. |
 
 ## 4.3 Detection confidence
 

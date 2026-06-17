@@ -32,6 +32,9 @@ build of torch is installed.** The default `pip install ultralytics` can pull a
 **CPU-only** torch (`2.x.y+cpu`), in which case the code silently and correctly
 falls back to CPU — fast to start, slow to run. **Verify CUDA explicitly** (§7.3).
 
+> To validate the entire GPU path on a **local** NVIDIA card (e.g. an RTX 3070
+> dev box) before touching AWS, see **§7.8** — it was verified end-to-end there.
+
 ---
 
 ## 7.2 Launch the instance
@@ -54,10 +57,13 @@ nvidia-smi          # should list "Tesla T4" and a driver/CUDA version
 # in the project venv (or the DLAMI's conda env)
 pip install -r requirements.txt
 
-# Replace any CPU torch with the CUDA build matching the AMI's CUDA major
-# (cu124 shown; use the index URL for the CUDA your driver supports):
-pip install --upgrade --force-reinstall torch \
-    --index-url https://download.pytorch.org/whl/cu124
+# Replace any CPU torch with a CUDA build whose index matches your torch VERSION
+# (not just the driver). For torch 2.12.x that is the cu130 (CUDA 13.0) index;
+# confirm the exact wheel exists for your Python/OS at download.pytorch.org/whl.
+# Uninstall the CPU build first for a clean swap (no torchaudio — unused here):
+pip uninstall -y torch torchvision torchaudio
+pip install torch==2.12.0 torchvision==0.27.0 \
+    --index-url https://download.pytorch.org/whl/cu130
 
 # VERIFY — this must print: True  Tesla T4
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
@@ -125,15 +131,104 @@ These are real throughput levers, left out to keep the demo simple and reliable:
 * **Batched inference** — frames are still processed one at a time. Batching N
   sampled frames per `predict()` call would raise GPU utilisation further; it
   needs code changes in both detectors + the orchestrator.
-* **NVENC video re-encode** — the annotated-video re-encode still uses **CPU
-  `libx264`** ([`_reencode_h264`](../../no-more-cheaters-backend/nomorecheaters/apis/ai/face_tracker.py)
-  hardcodes it; the bundled imageio-ffmpeg can't do NVENC anyway). On a T4 a
-  system ffmpeg built with `h264_nvenc` would speed this up, but CPU encode is
-  fine for a demo. After inference is GPU-fast, this re-encode becomes the
-  dominant cost on long videos.
 * **Multi-GPU / autoscaling / spot** — single instance, single worker only.
 * **TensorRT export** — max throughput, but the engine is GPU-arch-specific and
   adds build complexity; not worth it for a demo.
 
 See [06_conclusion_and_followups.md](06_conclusion_and_followups.md) for the
 detection/accuracy follow-ups (these are orthogonal — speed, not accuracy).
+
+---
+
+## 7.8 Local GPU testing on a dev box (verified on an RTX 3070)
+
+You can validate the **entire** GPU code path on any local NVIDIA card before
+touching AWS. This was verified end-to-end on a Windows 11 + **RTX 3070** (8 GB,
+Ampere) box — a faithful proxy for the T4 on **correctness and VRAM**, but **not
+speed** (see the caveat).
+
+**1. Install a version-matched CUDA torch.** The §7.1 trap applies locally too: a
+default install leaves `torch x.y.z+cpu`. Match the wheel index to your torch
+*version*, not just the driver — for **torch 2.12.x the CUDA wheels live only on
+the cu130 (CUDA 13.0) index** (cu128/cu129 stop at older torch). On Windows +
+Python 3.13, into the project venv:
+
+```
+.venv\Scripts\python -m pip uninstall -y torch torchvision torchaudio
+.venv\Scripts\python -m pip install torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytorch.org/whl/cu130
+```
+
+(No torchaudio wheel on cu130, and the pipeline doesn't use it. A modern driver —
+here 610.47, advertising CUDA 13.3 — satisfies the CUDA-13.0 runtime bundled in
+the wheel, so you do **not** install a separate CUDA Toolkit. If pip can't find a
+wheel for your interpreter, list real ones with
+`pip index versions torch --index-url https://download.pytorch.org/whl/cu130`.)
+
+**2. Verify, then smoke-test** with the bundled harness, which drives the *real*
+detectors, the model cache, FP16 gating and device resolution — not just
+`torch.cuda`:
+
+```
+.venv\Scripts\python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+.venv\Scripts\python test-photos\gpu_smoketest.py        # defaults to bus.jpg
+```
+
+Measured on the RTX 3070 (imgsz 960, FP16), both YOLO11x models resident:
+
+```
+resolved device  : 0  (GPU)  NVIDIA GeForce RTX 3070
+FP16 (half)      : object=True pose=True -> applied=True
+object detect    :  49.0 ms
+pose analyze     :  52.2 ms          (~100 ms per sampled frame, both models)
+peak VRAM        : reserved 0.57 GB  (torch allocator)
+```
+
+So the two models in FP16 use ~0.57 GB in torch's allocator; with the fixed
+CUDA/cuDNN context (~0.6–1 GB, tracked by the driver, not torch) the whole process
+footprint is ~1.5 GB — against ~6 GB free on the 8 GB card that fits with multi-GB
+headroom, and trivially on the 16 GB T4.
+
+**Speed caveat — the 3070 is the *faster* card.** Its FP16 tensor throughput is
+~2–3× the 70 W T4's, so treat any local per-frame timing as a **floor**: budget
+the production T4 at roughly 2–3× slower (≈150–300 ms per sampled frame for both
+models). The *accuracy* you observe locally is representative (FP16 numerics are
+comparable across Turing and Ampere); only latency differs. Size the frame-sample
+rate and any job timeout against the **T4**, not the 3070.
+
+---
+
+## 7.9 NVENC video re-encode (GPU H.264 encoding)
+
+The annotated full-length video and each evidence clip are re-encoded to
+browser-playable H.264 ([`_reencode_h264`](../../no-more-cheaters-backend/nomorecheaters/apis/ai/face_tracker.py)).
+By default (`AI_NVENC=auto`) the pipeline uses the GPU's hardware encoder
+**NVENC** (`h264_nvenc`) when it is available — far faster than CPU `libx264` on
+long recordings — and **always falls back to libx264** if NVENC isn't usable
+(missing encoder, exhausted session, driver mismatch). NVENC can only *speed up*
+a re-encode here, never break one. This matters because once inference is
+GPU-fast, the full-length re-encode is the next-largest cost on long videos.
+
+**Requirement: an ffmpeg built with `h264_nvenc`.** The pipeline auto-detects it
+(reads `ffmpeg -encoders` once, caches the result); if the encoder isn't listed
+it silently uses libx264. The **bundled `imageio-ffmpeg` does NOT include NVENC**,
+so for GPU encoding you need a system ffmpeg with it on `PATH`:
+
+```bash
+ffmpeg -hide_banner -encoders | grep nvenc      # must list h264_nvenc
+```
+
+On the g4dn DLAMI, install/verify such an ffmpeg — a static build with NVENC
+(e.g. BtbN/FFmpeg-Builds or johnvansickle.com), or the distro package if it was
+built with nvenc. No capable ffmpeg → the pipeline just encodes on CPU;
+correctness is unaffected, only speed.
+
+Controls:
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `AI_NVENC` | `auto` | `auto` → NVENC when the ffmpeg binary advertises `h264_nvenc`, else libx264. `off` → always libx264 (CPU). |
+
+Verified on an RTX 3070 with an NVENC-capable ffmpeg: the re-encode logs
+`Video re-encode codec: h264_nvenc (GPU)` and produces a valid H.264 file. On a
+box whose ffmpeg lacks NVENC it logs `libx264 (CPU)` and proceeds unchanged.
+
