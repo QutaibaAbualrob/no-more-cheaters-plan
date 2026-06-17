@@ -12,7 +12,8 @@ in the backend `.env`). Defaults below are the production values after the fix.
 |---------|---------|---------|
 | `AI_OBJECT_MODEL` | `yolo11x.pt` | Object-detection weights. |
 | `AI_POSE_MODEL` | `yolo11x-pose.pt` | Pose weights. |
-| `AI_DEVICE` | `auto` | `auto` → GPU if available else CPU; `cpu`; `0`/`cuda` → first GPU. Resolved once and cached. |
+| `AI_DEVICE` | `auto` | `auto` → GPU if available else CPU; `cpu`; `0`/`cuda` → first GPU. Resolved once and cached; the chosen device (and GPU name) is logged. |
+| `AI_WARMUP` | `true` | One-shot dummy inference when a model first loads, so the first real frame doesn't pay CUDA-context / cuDNN-autotune latency. Models are also cached and reused across jobs in a long-lived worker. Best-effort; never blocks analysis. |
 
 ## 4.2 Inference resolution & speed
 
@@ -20,7 +21,8 @@ in the backend `.env`). Defaults below are the production values after the fix.
 |---------|---------|---------|
 | `AI_OBJECT_IMGSZ` | `960` | Object-detection inference size. **640** = fast but loses small phones; **960** = balanced (≈2–2.5× compute); **1280** = best small-object recall (≈3.5–4×). Box coords are unaffected by this. |
 | `AI_POSE_IMGSZ` | `960` | Same for the pose pass (distant-student keypoints). |
-| `AI_OBJECT_HALF` | `false` | FP16 inference. **GPU only** — passed to `predict()` only when the device is not CPU. Lowers GPU cost/memory. |
+| `AI_HALF` | `true` | FP16 master switch. **GPU only** — applied by both detectors only when the device is not CPU (so it is safe to leave on; ignored on CPU). ~2× throughput, lower VRAM, negligible accuracy loss. |
+| `AI_OBJECT_HALF` / `AI_POSE_HALF` | = `AI_HALF` | Per-model FP16 overrides (`AI_OBJECT_HALF` kept for back-compat). Same GPU-only gate. |
 | `AI_AGNOSTIC_NMS` | `false` | Class-agnostic NMS. Near-inert with `classes=[63,67]`; opt-in only. |
 | `AI_SAMPLE_RATE` | `15` | Analyse every Nth frame. The biggest single lever on total runtime. Lower = more thorough + slower. |
 

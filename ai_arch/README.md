@@ -38,6 +38,7 @@ by default** with a documented path to a proper fix.
 | 4 | [04_configuration_reference.md](04_configuration_reference.md) | Every environment variable / tunable, its default, meaning, and recommended profiles for frontal vs oblique cameras. |
 | 5 | [05_verification.md](05_verification.md) | How the fix was verified — the unit suite, the empirical before/after, and exact reproduction steps. |
 | 6 | [06_conclusion_and_followups.md](06_conclusion_and_followups.md) | Conclusion, what is fixed vs. what remains a known limitation, and the prioritised follow-up work. |
+| 7 | [07_gpu_deployment.md](07_gpu_deployment.md) | Running the pipeline on a GPU (AWS g4dn / NVIDIA T4 on a Deep Learning AMI): CUDA torch install, FP16, model warmup/reuse, and how to verify it's actually on the GPU. Speed, not accuracy. |
 
 ---
 
@@ -58,11 +59,12 @@ by default** with a documented path to a proper fix.
 All changes live in the backend repo, `no-more-cheaters-backend/`:
 
 ```
-nomorecheaters/apis/ai/config.py          # tunables, class thresholds, looking-away gate
-nomorecheaters/apis/ai/yolo_detector.py   # imgsz + per-class confidence filtering
+nomorecheaters/apis/ai/config.py          # tunables, class thresholds, looking-away gate; FP16-on-GPU defaults, device logging
+nomorecheaters/apis/ai/yolo_detector.py   # imgsz + per-class confidence filtering; cached/warmed model load
 nomorecheaters/apis/ai/detector.py        # carry bbox end-to-end; gate the pose pass
-nomorecheaters/apis/ai/pose_analyzer.py   # v2 looking-away heuristic + real person box
+nomorecheaters/apis/ai/pose_analyzer.py   # v2 looking-away heuristic + real person box; GPU FP16 + cached/warmed model load
 nomorecheaters/apis/ai/face_tracker.py    # em-dash -> hyphen in drawn labels
+nomorecheaters/apis/ai/model_cache.py     # process-level YOLO model cache + one-shot warmup (GPU deploy)
 nomorecheaters/apis/services.py           # draw the REAL detection box; spatial attribution
 test-photos/run.py                        # standalone tester aligned to production
 ```
